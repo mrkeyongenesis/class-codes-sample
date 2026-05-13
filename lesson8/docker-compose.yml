@@ -1,0 +1,73 @@
+version: '3.8'
+
+services:
+  # Jenkins CI/CD Server
+  jenkins:
+    image: jenkins/jenkins:lts
+    container_name: jenkins-server
+    ports:
+      - "8080:8080"      # Jenkins web interface
+      - "50000:50000"    # Jenkins agent port
+    environment:
+      - JENKINS_OPTS=--httpPort=8080
+    volumes:
+      - jenkins-data:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock  # Docker access
+    networks:
+      - ci-cd-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Simple Flask Application
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: flask-app
+    ports:
+      - "5000:5000"
+    environment:
+      - FLASK_ENV=development
+      - FLASK_APP=app.py
+    volumes:
+      - ./app:/app
+    networks:
+      - ci-cd-network
+    depends_on:
+      - db
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # PostgreSQL Database
+  db:
+    image: postgres:15-alpine
+    container_name: postgres-db
+    environment:
+      - POSTGRES_USER=appuser
+      - POSTGRES_PASSWORD=apppass
+      - POSTGRES_DB=appdb
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - ci-cd-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U appuser"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  jenkins-data:
+  postgres-data:
+
+networks:
+  ci-cd-network:
+    driver: bridge
