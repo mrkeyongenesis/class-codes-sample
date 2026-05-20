@@ -8,7 +8,7 @@ This adapts the Cisco DEVASC "Build a CI/CD Pipeline Using Jenkins" lab to Codes
 
 ## Prerequisites
 
-- A GitHub Codespace with Docker available (see Step 0).
+- A GitHub Blank Codespace with Docker available (see Step 0).
 - The `gh` CLI (preinstalled in Codespaces).
 - A GitHub **Personal Access Token (PAT)** with at least `repo` scope, used both for pushing over HTTPS and for Jenkins credentials. **Step 2 walks you through generating one.**
 - A free **Docker Hub** account (hub.docker.com) for the pipeline's package/deploy stages. **Step 7 walks you through the access token.**
