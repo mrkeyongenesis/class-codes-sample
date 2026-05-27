@@ -48,7 +48,7 @@ Touch test file
 
 ---
 
-## EXAM QUESTIONS
+## QUESTIONS
 - Explain partitioning workflow
 - Why filesystem is needed?
 - Create partition and mount
