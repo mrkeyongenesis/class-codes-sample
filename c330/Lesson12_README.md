@@ -11,7 +11,6 @@ Disk → PV → VG → LV → FS → Mount
 ---
 
 ## VISUAL
-imageturn1search1†image_v9ZyvbSjrnic85uEObh+Mw==
 (Image: LVM architecture diagram)
 
 ---
@@ -53,7 +52,7 @@ xfs_growfs /lv_data
 
 ---
 
-## EXAM QUESTIONS
+##  QUESTIONS
 - Explain PV VG LV
 - Why LVM?
 - Extend LV
