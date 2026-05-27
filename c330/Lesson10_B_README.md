@@ -11,7 +11,6 @@ Disk → Partition → Filesystem → Mount → Use
 ---
 
 ## VISUAL OVERVIEW
-imageturn1search2†image_45OApkd3/xqybVMpJOw6Ng==
 (Image: partition workflow diagram)
 
 ---
