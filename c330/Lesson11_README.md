@@ -45,7 +45,7 @@ swapon -s
 
 ---
 
-## EXAM QUESTIONS
+## QUESTIONS
 - What is swap?
 - Why slower than RAM?
 - Create swap file
