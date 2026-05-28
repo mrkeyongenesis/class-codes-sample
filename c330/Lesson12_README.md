@@ -303,9 +303,9 @@ Inside `fdisk`, create **1 primary (128M)** and an **extended** containing **two
 
 ```
 n  p  1  <Enter>  +128M     # sdb1 primary 128M
-n  e  2  <Enter>  +500M       # sdb2 extended container (~500M)
-n     <Enter>     +125M     # sdb5 logical 125M
-n     <Enter>     +50M     # sdb6 logical 50M
+n  e  2  <Enter>  +500M     # sdb2 extended container (~500M)
+n  l     <Enter>  +125M     # sdb5 logical 125M
+n  l     <Enter>  +50M      # sdb6 logical 50M
 ```
 
 Now flag every data partition as type **8e (Linux LVM)**:
