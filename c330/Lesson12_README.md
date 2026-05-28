@@ -273,6 +273,43 @@ pvdisplay /dev/sdb6             # full detail of one PV
 **Tell the students:** `pvcreate` writes an LVM label + metadata to each partition. Note
 that `/dev/sdb1` does **not** appear here — it's a plain Linux partition, not an LVM PV.
 
+> ### ⚠️ Troubleshooting: `pvcreate` fails with "device has a signature"
+>
+> If you see errors like:
+> ```
+> Can't open /dev/sdb5 exclusively.  Mounted filesystem?
+> Error opening device /dev/sdb5 for reading at 0 length 4096.
+> Cannot use /dev/sdb5: device has a signature
+> ```
+> the partition still carries an **old signature** (leftover filesystem, swap, or LVM
+> label from a previous run of this demo). LVM refuses to overwrite it — a safety check.
+>
+> **Fix — wipe the stale signatures, then retry:**
+> ```bash
+> wipefs -a /dev/sdb5         # erase old signature on sdb5
+> wipefs -a /dev/sdb6         # erase old signature on sdb6
+> wipefs /dev/sdb5            # verify -- should print nothing
+> wipefs /dev/sdb6            # verify -- should print nothing
+> pvcreate /dev/sdb5 /dev/sdb6   # now succeeds
+> pvs
+> ```
+>
+> **If `wipefs` itself says the device is busy**, something is still actively using it.
+> Find and stop it first:
+> ```bash
+> lsblk /dev/sdb        # is sdb5/sdb6 mounted, or showing an LVM child?
+> swapon -s             # is one of them still active as swap?
+> ```
+> - Active swap:    `swapoff /dev/sdb5`
+> - Mounted:        `umount /dev/sdb5`
+> - Stale VG holds it: `vgchange -an my_first_vg` then `vgremove my_first_vg`
+>
+> Then re-run the `wipefs` + `pvcreate` commands above.
+>
+> **Tell the students:** this is the *same principle* as the teardown order — LVM will
+> never silently clobber data it sees a signature on, and you can't reuse a partition
+> that another layer is still using. The error is LVM protecting you.
+
 ---
 
 ## 2.4 Step 3 — Create a Volume Group (VG)
