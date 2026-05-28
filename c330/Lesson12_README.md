@@ -184,10 +184,10 @@ In one terminal start a live watch:
 watch swapon -s
 ```
 
-In a second terminal, stress memory (adjust `4G` to your VM's RAM):
+In a second terminal, stress memory (adjust `500M` to your VM's RAM):
 
 ```bash
-head -c 4G /dev/zero | tail
+head -c 500M /dev/zero | tail
 ```
 
 **Tell the students:** Watch the **Used** column climb on the watch screen as the kernel
