@@ -1,17 +1,21 @@
 # C330 — Swap Space & LVM Demo Guide (RHEL 9)
 
-**For lecturer demonstration in a blank RHEL 9 lab.**
+**For lecturer demonstration in a RHEL 9 lab.**
 Covers Lesson 11 (Manage Swap Space) and Lesson 12 (Logical Volume Management).
 
 > Every command below is meant to be typed live. After each block there is a short
 > *"Tell the students"* note explaining **why** the command matters and a
 > **real-world** scenario so the content makes sense beyond the lab.
 
+> **This guide matches the lab disk layout:**
+> `sdb1` = 128M **Linux (83)**, `sdb5` = 125M **Linux LVM (8e)**, `sdb6` = 50M **Linux LVM (8e)**,
+> with `sdc` (2G) available as a spare disk to extend the VG.
+
 ---
 
-## 0. Before You Start — Prepare the Lab
+## 0. Before You Start — Check the Lab
 
-Confirm you are `root` and that you have a clean second disk to play with.
+Confirm you are `root` and look at the disk layout.
 
 ```bash
 whoami                 # should print: root
@@ -19,21 +23,27 @@ lsblk                  # list all block devices and their layout
 free -h                # current RAM + swap summary
 ```
 
-**Tell the students:** `lsblk` is the single most important "where am I" command in
-storage work. `sda` is normally the OS disk — **never touch it**. We will only work
-on the *second* disk (`sdb`) and, for LVM, a third (`sdc`) if available.
-
-> ⚠️ **Safety rule for the whole session:** every destructive command we run targets
-> `/dev/sdb` or `/dev/sdc`. If your `lsblk` shows the OS living on `sdb`, STOP and
-> attach a fresh disk. In production a wrong device name destroys live data.
-
-If you need a clean disk during the demo:
-
-```bash
-wipefs -a /dev/sdb*    # erases partition-table/filesystem signatures on sdb
-wipefs -a /dev/sdc*    # (if you have a third disk)
-lsblk                  # verify the disks are now empty
+**Expected `lsblk` (your lab):**
 ```
+sda                    20G   disk
+├─sda1     600M  part  /boot/efi
+├─sda2       1G  part  /boot
+└─sda3    18.4G  part
+  ├─rhel-root  16.4G lvm  /
+  └─rhel-swap     2G lvm  [SWAP]
+sdb                     2G   disk
+├─sdb1     128M  part        <- will be Linux (83)
+├─sdb2       1K  part        <- extended container
+├─sdb5     125M  part        <- will be Linux LVM (8e)
+└─sdb6      50M  part        <- will be Linux LVM (8e)
+sdc                     2G   disk        <- spare, used later to extend the VG
+```
+
+**Tell the students:** `lsblk` is the "where am I" command in storage work. `sda` is the
+OS disk — **never touch it**. We work only on `sdb` and `sdc`.
+
+> ⚠️ **Safety rule for the whole session:** every command targets `/dev/sdb` or
+> `/dev/sdc`. If your OS ever lives on `sdb`, STOP. A wrong device name destroys live data.
 
 ---
 
@@ -44,216 +54,127 @@ lsblk                  # verify the disks are now empty
 **Tell the students:** RAM is fast but limited. Swap is disk space the kernel uses to
 park *inactive* memory pages when RAM gets tight. **Virtual memory = RAM + swap.**
 
-> **Real world:** A web server with 8 GB RAM gets a sudden traffic spike. Instead of
-> the kernel's OOM-killer terminating your database, idle pages spill into swap and the
-> server limps through the spike. Swap is a *safety cushion*, **not** a substitute for
-> buying more RAM — disk is ~1000× slower than RAM.
+> **Real world:** A web server with 8 GB RAM hits a traffic spike. Instead of the
+> OOM-killer terminating your database, idle pages spill into swap and the server
+> survives. Swap is a *safety cushion*, **not** a replacement for more RAM — disk is
+> ~1000× slower than RAM.
 
-Recommended swap sizing (from the Red Hat guide):
+Recommended swap sizing (Red Hat guide):
 
 | RAM in system | Recommended swap | With hibernation |
 |---|---|---|
-| ≤ 2 GB | 2× RAM | 3× RAM |
-| 2–8 GB | = RAM | 2× RAM |
-| 8–64 GB | ≥ 4 GB | 1.5× RAM |
-| > 64 GB | ≥ 4 GB | not recommended |
+| <= 2 GB | 2x RAM | 3x RAM |
+| 2-8 GB | = RAM | 2x RAM |
+| 8-64 GB | >= 4 GB | 1.5x RAM |
+| > 64 GB | >= 4 GB | not recommended |
 
 Check what you have now:
 
 ```bash
 free -h                # look at the Swap: row
-swapon -s              # show currently active swap devices/files
-swapon --show          # newer, friendlier output (same info)
-cat /proc/swaps        # the raw source swapon reads from
+swapon -s              # show active swap devices/files
+swapon --show          # newer friendlier output
+cat /proc/swaps        # raw source swapon reads from
 ```
 
 ---
 
-## 1.2 Two ways to add swap
+## 1.2 Swap using a FILE
 
-There are two flavours of swap: a **swap partition** (carved out of a disk) and a
-**swap file** (an ordinary file). We'll demo **both**.
-
----
-
-### 1.2a Swap using a PARTITION
-
-**Step 1 — Create a small partition on the spare disk.**
-
-```bash
-fdisk /dev/sdb
-```
-
-Inside `fdisk` type, in order:
-```
-n        # new partition
-p        # primary
-1        # partition number 1
-<Enter>  # accept default first sector
-+512M    # make it 512 MB
-w        # write changes to disk and quit
-```
-
-Refresh the kernel's view of the partition table:
-
-```bash
-partprobe /dev/sdb     # tell the kernel to re-read the partition table
-lsblk /dev/sdb         # confirm sdb1 now exists
-```
-
-**Tell the students:** type code `82` flags the partition's *intended* purpose. The
-disk doesn't actually become swap until we write a swap signature in the next step.
-
-**Step 2 — Write the swap signature.**
-
-```bash
-mkswap /dev/sdb1       # formats the partition as swap (writes a UUID + header)
-```
-
-**Step 3 — Activate and verify.**
-
-```bash
-swapon /dev/sdb1       # turn the swap on NOW (this boot only)
-swapon -s              # sdb1 should appear in the list
-free -h                # Swap total should have grown
-```
-
-**Step 4 — Turn it off again (so we can reuse the disk for LVM later).**
-
-```bash
-swapoff /dev/sdb1
-swapon -s              # sdb1 is gone
-```
-
-> **Real world:** Swap partitions are the classic approach — created at install time,
-> fixed in size, slightly faster because the blocks are contiguous. The downside is you
-> can't easily resize a partition later, which is exactly why swap *files* exist.
-
----
-
-### 1.2b Swap using a FILE
-
-This is more flexible — you can create/resize swap any time without repartitioning.
+We'll demo the **swap file** method (flexible, no repartitioning needed).
 
 **Step 1 — Create the empty file (256 MB).**
 
 ```bash
 dd if=/dev/zero of=/var/local/swapfile bs=1M count=256
-```
-
-**Tell the students:** `dd` copies blocks. `if` = input file (`/dev/zero` = endless
-zeros), `of` = output file. We grow the file to 256 MB (256 × 1 MB blocks).
-
-> ⚠️ `dd` is nicknamed **"Disk Destroyer"** — mixing up `if` and `of` overwrites a real
-> disk. Always read the line twice before pressing Enter.
-
-Verify size:
-
-```bash
 ls -lh /var/local/swapfile
 ```
+
+**Tell the students:** `dd` copies blocks. `if` = input (`/dev/zero` = endless zeros),
+`of` = output. We grow the file to 256 MB.
+
+> ⚠️ `dd` is nicknamed **"Disk Destroyer"** — swapping `if` and `of` overwrites a real
+> disk. Read the line twice before Enter.
 
 **Step 2 — Write the swap signature.**
 
 ```bash
 mkswap /var/local/swapfile
+chmod 600 /var/local/swapfile     # a swap file holds memory contents -> root only
+ls -l /var/local/swapfile         # should show -rw-------
 ```
 
-It will warn about insecure permissions. Fix them — a swap file holds memory contents,
-so only root may read it:
-
-```bash
-chmod 600 /var/local/swapfile
-ls -l /var/local/swapfile      # should now show -rw-------
-```
-
-**Step 3 — Activate with a priority.**
+**Step 3 — Activate with a priority and verify.**
 
 ```bash
 free -h                              # BEFORE
 swapon -p 2 /var/local/swapfile      # activate with priority 2
 swapon -s                            # file now listed, Priority 2
-free -h                              # AFTER — Swap total grew
+free -h                              # AFTER -- Swap total grew
 ```
 
-**Step 4 — See swap actually get used (optional, fun demo).**
+**Step 4 — Watch swap get used (live demo).**
 
-In one terminal start a live watch:
+In one terminal:
 
 ```bash
 watch swapon -s
 ```
 
-In a second terminal, stress memory (adjust `500M` to your VM's RAM):
+> **To EXIT the `watch` screen, press `Ctrl + C`.** (If Ctrl+C does nothing, press `q`,
+> or `Ctrl+Z` then `kill %1`.) Stopping `watch` does NOT touch your swap.
+
+In a second terminal, stress memory with **500M** (small enough for the lab VM):
 
 ```bash
 head -c 500M /dev/zero | tail
 ```
 
-**Tell the students:** Watch the **Used** column climb on the watch screen as the kernel
-pushes pages into swap. This is virtual memory working in real time.
+**Tell the students:** Watch the **Used** column on the swapfile line climb as the kernel
+pushes pages into swap. That is virtual memory working in real time.
 
 ---
 
 ## 1.3 Swap priority
 
-```bash
-swapon -p 1 /var/local/swapfile   # re-prioritise (must swapoff/swapon, or set on activate)
-swapon -s                         # check Priority column
-```
+**Tell the students:** **Higher number = used first.** So `3 > 1 > -1 > -3`. Give fast
+(SSD) swap a higher priority so the kernel reaches for it before slow disks.
 
-**Tell the students:** **Higher number = used first.** So `3 > 1 > -1 > -3`. If you have
-fast SSD swap and slow HDD swap, give the SSD the higher priority so the kernel reaches
-for it first.
-
-> **Real world:** Spread swap across several fast disks with equal priority and the
+> **Real world:** Spread swap across several fast disks with *equal* priority and the
 > kernel stripes across them (like RAID-0 for swap) for better throughput.
 
 ---
 
 ## 1.4 Make swap survive a reboot (persistent)
 
-Active swap disappears on reboot unless it's in `/etc/fstab`.
-
 ```bash
-# View current fstab first
 cat /etc/fstab
-
-# Append a swap-file entry (priority 2)
 echo "/var/local/swapfile  swap  swap  defaults,pri=2  0 0" >> /etc/fstab
-
-# Re-read fstab so systemd knows about the change
 systemctl daemon-reload
 
-# Test fstab WITHOUT rebooting: turn all swap off then on from fstab
+# Test fstab WITHOUT rebooting:
 swapoff -a
 swapon -a
-swapon -s        # the file should come back automatically
+swapon -s        # the file comes back automatically
 ```
 
-**Tell the students:** The six fields are *device, mountpoint, type, options, dump,
-fsck-pass*. For swap the mountpoint is literally the word `swap`.
+**Tell the students:** fstab fields are *device, mountpoint, type, options, dump, fsck*.
+For swap the mountpoint is literally the word `swap`.
 
-> ⚠️ A typo in `/etc/fstab` can stop a server from booting. Always run `swapon -a`
-> (or `mount -a`) to validate the line *before* you reboot for real.
+> ⚠️ A typo in `/etc/fstab` can stop a server booting. Always validate with `swapon -a`
+> (or `mount -a`) BEFORE a real reboot.
 
-**Step — Deactivate cleanly.**
+**Deactivate and clean up.**
+
+> If you ever get **"text file busy"** when removing the swapfile, it's still active.
+> Run `swapoff` first — you cannot modify a file that is in use as live swap.
 
 ```bash
-swapoff /var/local/swapfile
+swapoff /var/local/swapfile          # MUST do this before removing the file
 swapon -s
-free -h
-```
-
-**Cleanup so the disk is free for Part 2:**
-
-```bash
-# Remove the persistent line (edit it out)
-vi /etc/fstab          # delete the /var/local/swapfile line, save (:wq)
+vi /etc/fstab                        # delete the /var/local/swapfile line, save (:wq)
 rm -f /var/local/swapfile
-swapoff /dev/sdb1 2>/dev/null
-wipefs -a /dev/sdb*    # clear sdb so LVM starts clean
-lsblk
+free -h
 ```
 
 ---
@@ -262,20 +183,18 @@ lsblk
 
 ## 2.1 Why LVM exists
 
-**Tell the students:** Plain partitions are rigid — once `/data` is 100 GB it's stuck at
-100 GB unless you back up, repartition and restore. **LVM adds a flexible layer** so you
-can grow, shrink, pool disks, and snapshot *while the system stays online*.
-
-The LVM stack, bottom to top:
+**Tell the students:** Plain partitions are rigid — once `/data` is 100 GB it's stuck
+unless you back up, repartition and restore. **LVM adds a flexible layer** so you can
+grow, shrink, pool disks, and snapshot *while the system stays online*.
 
 ```
-Hard drive / partition  ─►  PV (Physical Volume)
-                                 │
-        one or more PVs pooled into ─►  VG (Volume Group)
-                                              │
-              VG carved into virtual partitions ─►  LV (Logical Volume)
-                                                          │
-                                  filesystem + mountpoint ─►  /mnt/...
+Hard drive / partition  ->  PV (Physical Volume)
+                                 |
+        one or more PVs pooled into ->  VG (Volume Group)
+                                              |
+              VG carved into virtual partitions ->  LV (Logical Volume)
+                                                          |
+                                  filesystem + mountpoint ->  /lv_mount
 ```
 
 | Term | Meaning |
@@ -283,39 +202,39 @@ Hard drive / partition  ─►  PV (Physical Volume)
 | **PV** | Physical Volume — a disk/partition labelled for LVM |
 | **VG** | Volume Group — a pool made of one or more PVs |
 | **LV** | Logical Volume — a flexible "partition" cut from a VG |
-| **PE / LE** | Physical / Logical Extents — the fixed-size blocks LVM allocates in (default 4 MiB) |
+| **PE / LE** | Physical / Logical Extents — fixed-size blocks LVM allocates in (default 4 MiB) |
 
-> **Real world:** A database LV is filling up. With LVM you add a new disk to the VG and
-> grow the LV + filesystem live — zero downtime. With classic partitions that's an outage.
+> **Real world:** A database LV is filling up. With LVM you add a disk to the VG and grow
+> the LV + filesystem live — zero downtime. With classic partitions that's an outage.
 
 ---
 
-## 2.2 Step 1 — Prepare the physical device (partitions)
+## 2.2 Step 1 — Set the partition types on /dev/sdb
 
-We'll create three partitions on `/dev/sdb` and tag them as **Linux LVM**.
+In this lab the partitions already exist. We only need to set their **types**:
+`sdb1` -> **Linux (83)**, `sdb5` and `sdb6` -> **Linux LVM (8e)**.
 
 ```bash
 fdisk /dev/sdb
 ```
 
-Inside `fdisk`, create **1 primary (128M)** and an **extended** containing **two logical
-(256M, 512M)** partitions:
+Inside `fdisk`, type:
 
 ```
-n  p  1  <Enter>  +128M     # sdb1 primary 128M
-n  e  2  <Enter>  +500M     # sdb2 extended container (~500M)
-n  l     <Enter>  +125M     # sdb5 logical 125M
-n  l     <Enter>  +50M      # sdb6 logical 50M
-```
+t        # change type
+1        # partition 1
+83       # 83 = Linux        (sdb1 stays a plain Linux partition)
 
-Now flag every data partition as type **8e (Linux LVM)**:
+t        # change type
+5        # partition 5
+8e       # 8e = Linux LVM    (sdb5 -> LVM)
 
-```
-t  1  8e        # set sdb1 -> Linux LVM
-t  5  8e        # set sdb5 -> Linux LVM
-t  6  8e        # set sdb6 -> Linux LVM
-p               # print the table to review
-w               # write and quit
+t        # change type
+6        # partition 6
+8e       # 8e = Linux LVM    (sdb6 -> LVM)
+
+p        # print to review
+w        # write and quit
 ```
 
 Refresh the kernel and check:
@@ -323,67 +242,70 @@ Refresh the kernel and check:
 ```bash
 partprobe /dev/sdb
 lsblk /dev/sdb
-fdisk -l /dev/sdb        # Type column should read "Linux LVM" for 1,5,6
+fdisk -l /dev/sdb
 ```
 
-**Tell the students:** the `8e` type isn't strictly required for LVM to work, but it
-*documents intent* and protects the partition from being grabbed by other tools.
+**Expected types:** `sdb1` = `Linux`, `sdb5` = `Linux LVM`, `sdb6` = `Linux LVM`.
 
-> **Alternative with `parted`** (does the same job, scriptable):
+**Tell the students:** `sdb1` is deliberately left as **Linux (83)** — it is NOT going
+into LVM, so it is a good contrast. Only `sdb5` and `sdb6` are flagged `8e` for LVM. The
+type tag documents intent; LVM will only build on the partitions we choose.
+
+> **Alternative with `parted`** (scriptable, same result for an LVM partition):
 > ```bash
-> parted /dev/sdb mkpart primary xfs 2048s 128MB
-> parted /dev/sdb set 1 lvm on
-> udevadm settle          # wait for device nodes to appear
+> parted /dev/sdb set 5 lvm on
+> parted /dev/sdb set 6 lvm on
+> udevadm settle
 > ```
 
 ---
 
 ## 2.3 Step 2 — Create Physical Volumes (PV)
 
+Only the two LVM partitions become PVs:
+
 ```bash
-pvcreate /dev/sdb1 /dev/sdb5 /dev/sdb6     # label all three as PVs
-pvs                                        # short summary
-pvdisplay /dev/sdb6                        # full detail of one PV
+pvcreate /dev/sdb5 /dev/sdb6     # label sdb5 + sdb6 as PVs (NOT sdb1)
+pvs                              # short summary
+pvdisplay /dev/sdb6             # full detail of one PV
 ```
 
-**Tell the students:** `pvcreate` writes an LVM label + metadata area to each partition.
-`pvs` is the quick view; `pvdisplay` is the verbose view. Note PSize/PFree.
+**Tell the students:** `pvcreate` writes an LVM label + metadata to each partition. Note
+that `/dev/sdb1` does **not** appear here — it's a plain Linux partition, not an LVM PV.
 
 ---
 
 ## 2.4 Step 3 — Create a Volume Group (VG)
 
-Pool two of the PVs into a group called `my_first_vg`:
+Pool both PVs into a group called `my_first_vg`:
 
 ```bash
-vgs                                        # what VGs already exist (rhel is the OS one)
-vgcreate my_first_vg /dev/sdb1 /dev/sdb5   # pool sdb1 + sdb5
+vgs                                        # existing VGs (rhel is the OS one)
+vgcreate my_first_vg /dev/sdb5 /dev/sdb6   # pool sdb5 (125M) + sdb6 (50M)
 vgs                                        # my_first_vg now listed
 vgdisplay my_first_vg                      # note VG Size, PE Size (4 MiB), Total PE
 ```
 
-**Tell the students:** The VG is now a single storage *pool*. Its size = sum of its PVs.
-The **PE Size** (4 MiB default) is the smallest unit LVM allocates in — important when we
-size LVs by *extents* later.
+**Tell the students:** The VG is now a single pool of ~175M (125M + 50M, minus a little
+metadata). **PE Size** (4 MiB default) is the smallest unit LVM allocates in.
 
-> **Real world:** Think of the VG as a tank of water filled from several taps (disks).
-> You no longer care which physical disk a logical volume sits on.
+> **Real world:** Think of the VG as a tank filled from several taps (disks). You stop
+> caring which physical disk a logical volume sits on.
 
 ---
 
 ## 2.5 Step 4 — Create a Logical Volume (LV)
 
-Cut a 200 MB LV from the pool:
+Our pool is small (~170M usable), so create a **100M** LV:
 
 ```bash
-lvs                                                       # existing LVs
-lvcreate -L 200M -n my_first_lv my_first_vg               # -L size, -n name
-lvdisplay /dev/my_first_vg/my_first_lv                    # full detail
+lvs                                                  # existing LVs
+lvcreate -L 100M -n my_first_lv my_first_vg          # -L size, -n name
+lvdisplay /dev/my_first_vg/my_first_lv               # full detail
 ```
 
-**Tell the students:** `-L 200M` sizes by capacity; you can also size by extents with
-`-l` (e.g. `-l 50` = 50 × 4 MiB = 200 MiB). The LV appears as a device under both
-`/dev/my_first_vg/` and `/dev/mapper/`.
+**Tell the students:** `-L 100M` sizes by capacity; `-l 25` would size by extents
+(25 x 4 MiB = 100 MiB). The LV appears under both `/dev/my_first_vg/` and `/dev/mapper/`.
 
 ---
 
@@ -391,17 +313,17 @@ lvdisplay /dev/my_first_vg/my_first_lv                    # full detail
 
 ```bash
 mkfs -t xfs /dev/my_first_vg/my_first_lv   # format as XFS (RHEL 9 default)
-mkdir /lv_mount                            # create a mountpoint
+mkdir /lv_mount                            # mountpoint
 mount /dev/my_first_vg/my_first_lv /lv_mount
-df -h | grep lv_mount                      # confirm it's mounted & sized
-mount | grep my_first                      # see mount options + type
+df -h | grep lv_mount                      # confirm mounted & sized
+mount | grep my_first                      # see options + type
 ```
 
-**Tell the students:** Notice the mounted name shows as `/dev/mapper/my_first_vg-my_first_lv`.
-That's the **Device Mapper** — the kernel framework LVM uses; every LV gets a node under
-`/dev/mapper`.
+**Tell the students:** the mounted name shows as
+`/dev/mapper/my_first_vg-my_first_lv`. That's the **Device Mapper** — the kernel
+framework LVM uses; every LV gets a node under `/dev/mapper`.
 
-Write some data to prove it's a real filesystem:
+Write some data to prove it's real:
 
 ```bash
 cd /lv_mount
@@ -429,35 +351,38 @@ df -h | grep lv_mount              # back, mounted from fstab
 
 ## 2.8 The headline feature — GROW the volume online
 
-This is the moment that sells LVM. We'll add a disk, grow the VG, grow the LV, then grow
-the filesystem — **all while it stays mounted and in use.**
+Our VG is nearly full, so we'll add the spare disk **`sdc`** to the pool, then grow the
+LV and the filesystem — **while it stays mounted.**
 
-**Step A — Add the third PV into the VG.**
+**Step A — Make sdc a PV and add it to the VG.**
 
 ```bash
 pvs ; vgs ; lvs                    # snapshot the "before" state
-vgextend my_first_vg /dev/sdb6     # add the 512M PV to the pool
-vgs                                # VFree has grown
+pvcreate /dev/sdc                  # label the whole spare disk as a PV
+vgextend my_first_vg /dev/sdc      # add the 2G disk to the pool
+vgs                                # VFree jumps to ~2G
 ```
 
-**Step B — Extend the LV (add 500 MB).**
+**Tell the students:** we can add a *whole disk* (`/dev/sdc`) as a PV without partitioning
+it. The VG instantly gets bigger.
+
+**Step B — Extend the LV by 500M.**
 
 ```bash
-df -h | grep my_first_lv                                   # size BEFORE
-lvextend -L +500M /dev/my_first_vg/my_first_lv             # or:  -l +125  (125 extents)
-lvs                                                        # LSize grew, but...
-df -h | grep my_first_lv                                   # ...df still shows OLD size!
+df -h | grep my_first_lv                            # size BEFORE
+lvextend -L +500M /dev/my_first_vg/my_first_lv      # add 500M to the LV
+lvs                                                 # LSize grew, but...
+df -h | grep my_first_lv                            # ...df still shows the OLD size!
 ```
 
-**Tell the students:** the *container* (LV) is bigger, but the *filesystem* inside
-doesn't know yet. We must grow the filesystem too.
+**Tell the students:** the *container* (LV) is bigger, but the *filesystem* inside doesn't
+know yet. We must grow the filesystem too.
 
 **Step C — Grow the filesystem on the fly.**
 
 ```bash
-# XFS: grow by MOUNTPOINT, online only
-xfs_growfs /lv_mount
-df -h | grep my_first_lv     # NOW df shows the new larger size
+xfs_growfs /lv_mount               # XFS grows by MOUNTPOINT, online only
+df -h | grep my_first_lv           # NOW df shows the new larger size
 ```
 
 | Filesystem | Grow command | Argument | Notes |
@@ -465,17 +390,17 @@ df -h | grep my_first_lv     # NOW df shows the new larger size
 | XFS (RHEL default) | `xfs_growfs` | the **mountpoint** | online only, **grow only** |
 | ext2/3/4 | `resize2fs` | the **LV device** | online **and** offline, can shrink |
 
-> 💡 Shortcut: `lvextend -r -L +500M <lv>` resizes the LV **and** the filesystem in one
-> step (`-r` = resize fs automatically).
+> Shortcut: `lvextend -r -L +500M <lv>` grows the LV **and** the filesystem in one step
+> (`-r` = resize fs automatically).
 
-> **Real world:** "Our `/var/lib/mysql` is at 95%." With LVM: add disk → `vgextend` →
+> **Real world:** "Our `/var/lib/mysql` is at 95%." With LVM: add disk -> `vgextend` ->
 > `lvextend -r`. Done in under a minute, no maintenance window, no restart.
 
 ---
 
-## 2.9 Tear-down (clean up in the correct order)
+## 2.9 Tear-down (correct order)
 
-Order matters: **unmount → remove LV → remove VG → remove PV labels.**
+Order matters: **unmount -> remove LV -> remove VG -> remove PV labels.**
 
 ```bash
 # 1. Remove the fstab line first (avoid a broken boot)
@@ -490,27 +415,25 @@ lvremove /dev/my_first_vg/my_first_lv      # answer y
 # 4. Remove the volume group
 vgremove my_first_vg                       # answer y
 
-# 5. Wipe the PV labels
-pvremove /dev/sdb1 /dev/sdb5 /dev/sdb6
+# 5. Remove the PV labels
+pvremove /dev/sdb5 /dev/sdb6 /dev/sdc
 
-# 6. (Optional) shrink an existing VG by removing a PV
-#    vgreduce <vg> /dev/sdbX
-
-# 7. Nuke the whole disk back to blank
+# 6. (Optional) blank the disks
 wipefs -a /dev/sdb*
-lsblk                # sdb should be empty again
+wipefs -a /dev/sdc*
+lsblk
 ```
 
 **Tell the students:** if you remove things out of order (e.g. `pvremove` a disk still in
-a VG) LVM refuses — it's protecting your data. The teardown is the create steps in reverse.
+a VG) LVM refuses — it protects your data. Teardown is the create steps in reverse.
 
 ---
 
 ## 2.10 (Info only) Stratis — the modern alternative
 
 **Tell the students:** Red Hat also ships **Stratis**, which layers pools + filesystems
-with snapshots on top of LVM/XFS but with simpler commands. *Mention it exists, but this
-module's focus is LVM* — Stratis is for awareness only.
+with snapshots on top of LVM/XFS but with simpler commands. *Awareness only — this
+module's focus is LVM.*
 
 ---
 
@@ -519,12 +442,13 @@ module's focus is LVM* — Stratis is for awareness only.
 **Swap**
 ```
 mkswap <dev|file>          # write swap signature
+chmod 600 <swapfile>       # secure a swap file
 swapon  -p N <dev|file>    # activate (priority N)
-swapoff <dev|file>         # deactivate
+swapoff <dev|file>         # deactivate (do this before deleting the file!)
 swapon -s  /  free -h      # verify
 ```
 
-**LVM (bottom → top)**
+**LVM (bottom -> top)**
 ```
 pvcreate  pvs  pvdisplay        # Physical Volume
 vgcreate  vgextend  vgreduce    # Volume Group
@@ -545,7 +469,14 @@ wipefs -a      # blank a disk (DANGER)
 
 ---
 
-### One-line summary to leave on the board
+### This lab's partition roles (quick reference)
+| Partition | Size | Type | Role in demo |
+|---|---|---|---|
+| `sdb1` | 128M | Linux (83) | plain partition — NOT in LVM (contrast) |
+| `sdb5` | 125M | Linux LVM (8e) | PV -> joins `my_first_vg` |
+| `sdb6` | 50M  | Linux LVM (8e) | PV -> joins `my_first_vg` |
+| `sdc`  | 2G   | whole disk | PV added later via `vgextend` to grow the LV |
+
+### One-line summary for the board
 > **Swap** = extra (slow) memory cushion on disk. **LVM** = a flexible storage layer
-> (PV → VG → LV) that lets you grow, pool, and snapshot disks live — the reason every
-> serious Linux server uses it.
+> (PV -> VG -> LV) that lets you grow, pool, and snapshot disks live.
