@@ -290,6 +290,7 @@ that `/dev/sdb1` does **not** appear here — it's a plain Linux partition, not 
 > wipefs -a /dev/sdb6         # erase old signature on sdb6
 > wipefs /dev/sdb5            # verify -- should print nothing
 > wipefs /dev/sdb6            # verify -- should print nothing
+> reboot
 > pvcreate /dev/sdb5 /dev/sdb6   # now succeeds
 > pvs
 > ```
