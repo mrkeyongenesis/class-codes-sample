@@ -91,8 +91,6 @@ p        # primary
 1        # partition number 1
 <Enter>  # accept default first sector
 +512M    # make it 512 MB
-t        # change type
-82       # 82 = "Linux swap / Solaris"
 w        # write changes to disk and quit
 ```
 
